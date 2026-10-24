@@ -1,0 +1,41 @@
+# mwan3-sticky-flush — remove sticky entries of a failed WAN from mwan3.
+# Append this block to the end of /etc/mwan3.user (see README.md). MIT, see LICENSE.
+# Based on the selective flush in vjt/mwan3-selective-flush (MIT).
+#
+# With sticky enabled, mwan3 stores in an ipset (mwan3_rule_ipv4_<rule>) the WAN assigned
+# to each source IP. When a WAN goes down, those entries keep pointing to it until the
+# timeout expires (600 s by default). This block deletes them as soon as the WAN goes
+# down, so clients leave through the other WAN immediately.
+#
+# ipset entries look like "IP,0x<mark>". The WAN mark is mwan3_get_iface_id << 8,
+# written as 8-digit hex (for example 0x00000100 for the first WAN, 0x00000200 for the second).
+
+if [ "$ACTION" = "ifdown" ] || [ "$ACTION" = "disconnected" ]; then
+    (
+        . /lib/functions.sh
+        . /lib/mwan3/mwan3.sh
+        config_load mwan3
+        mwan3_get_iface_id id "$INTERFACE"
+        [ -n "$id" ] && [ "$id" != "0" ] || exit 0
+
+        # "disconnected" is also sent when mwan3 restarts while the WAN is still up:
+        # if the WAN still answers to ping, leave the entries alone.
+        if [ "$ACTION" = "disconnected" ]; then
+            dev="$DEVICE"
+            [ -z "$dev" ] && { . /lib/functions/network.sh; network_get_device dev "$INTERFACE"; }
+            if [ -n "$dev" ] && { ping -c 1 -W 2 -I "$dev" 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 2 -I "$dev" 8.8.8.8 >/dev/null 2>&1; }; then
+                logger -t mwan3-sticky-flush "sticky entries of $INTERFACE kept: $dev still responds"
+                exit 0
+            fi
+        fi
+
+        mark=$((id << 8))
+        hm=$(printf "0x%08x" "$mark")
+        for s in $(ipset list -n 2>/dev/null | grep "^mwan3_rule_ipv4_"); do
+            ipset save "$s" 2>/dev/null | grep "^add " | while read -r _ set key _; do
+                case "$key" in *,"$hm") ipset del "$set" "$key" 2>/dev/null;; esac
+            done
+        done
+        logger -t mwan3-sticky-flush "sticky entries of $INTERFACE removed (mark $hm)"
+    )
+fi
