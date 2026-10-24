@@ -2,6 +2,18 @@
 
 Removes the **sticky** assignments of a failed WAN from mwan3, so clients leave through the other WAN right away instead of waiting for the timeout (600 s by default).
 
+## Complements mwan3-selective-flush
+
+This project is a companion to [vjt/mwan3-selective-flush](https://github.com/vjt/mwan3-selective-flush), not a replacement. The two fix different things:
+
+| | [mwan3-selective-flush](https://github.com/vjt/mwan3-selective-flush) | mwan3-sticky-flush (this repo) |
+|---|---|---|
+| What it removes | Existing **connections** (conntrack entries) of the failed WAN | **Sticky assignments** (`mwan3_rule_ipv4_*` ipsets) of the failed WAN |
+| Effect | Long-lived TCP connections don't hang after a failover | New connections and reconnecting clients leave through the other WAN immediately |
+| Tool used | `conntrack -D -m <mark>/0x3F00` | `ipset del` on entries with the same mark |
+
+Use both if you run sticky rules and want fast recovery for existing and new traffic. The conntrack flush block is not included here. Install it from the upstream project.
+
 ## The problem
 
 With `sticky=1` on an mwan3 rule, each source IP is assigned to a WAN for `timeout` seconds. If that WAN goes down, mwan3 stops using it for new traffic, but the sticky entries still point to it. The clients on that IP stay without internet until the entry expires.
